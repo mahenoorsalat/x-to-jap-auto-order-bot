@@ -1,112 +1,107 @@
-# High-Speed X (Twitter) to JustAnotherPanel (JAP) Automation Bot
+# x-to-jap-auto-order-bot
 
-An ultra-fast, zero-cost, 24/7 automated bridge that monitors any target X (Twitter) channel without official Twitter Developer API keys, parses incoming post content for target URLs, and immediately places SMM panel orders on **JustAnotherPanel (JAP)**.
+So basically this script watches a Twitter/X account and the moment they post something, it grabs the link from the tweet and fires an order on JustAnotherPanel automatically. No manual work needed.
 
----
-
-## ⚡ Key Highlights & Architecture
-
-- **No Twitter Developer API Required**: Bypasses official Twitter API restrictions by utilizing high-resilience, auto-rotating public Nitter RSS mirrors.
-- **Sub-Second Execution Speed**: Powered by Python's `httpx` async I/O engine to capture first-come, first-served orders instantly.
-- **Intelligent Link Parser**: Automatically extracts target URLs (Instagram, TikTok, YouTube, X, etc.) from post descriptions and handles URL shortener redirects (e.g., `t.co`).
-- **Dynamic Service ID Routing**: Automatically maps target domains (e.g. `instagram.com` vs `tiktok.com`) to specific JAP Service IDs on the fly.
-- **Zero Duplicate Orders**: SQLite database tracking guarantees each post GUID is processed exactly once.
+Built this because JAP is first-come-first-served so you need to be fast. This thing runs 24/7 and reacts in seconds.
 
 ---
 
-## 📁 File Overview
+## what it does
 
-- [`main.py`](file:///c:/Users/salat/OneDrive/Desktop/python/main.py): The 24/7 core monitoring and auto-order daemon.
-- [`config.py`](file:///c:/Users/salat/OneDrive/Desktop/python/config.py): Configuration parser loading variables from `.env`.
-- [`jap_client.py`](file:///c:/Users/salat/OneDrive/Desktop/python/jap_client.py): Async HTTP client for JustAnotherPanel PerfectPanel API.
-- [`x_tracker.py`](file:///c:/Users/salat/OneDrive/Desktop/python/x_tracker.py): Resilient X feed tracker with automatic Nitter mirror failover.
-- [`link_parser.py`](file:///c:/Users/salat/OneDrive/Desktop/python/link_parser.py): Regex URL extractor & link redirect resolver.
-- [`state_manager.py`](file:///c:/Users/salat/OneDrive/Desktop/python/state_manager.py): SQLite database manager for tracking processed posts.
-- [`test_jap.py`](file:///c:/Users/salat/OneDrive/Desktop/python/test_jap.py): CLI utility for testing JAP API keys, balance, and test orders.
-- [`.env.example`](file:///c:/Users/salat/OneDrive/Desktop/python/.env.example): Environment variable template.
-- [`requirements.txt`](file:///c:/Users/salat/OneDrive/Desktop/python/requirements.txt): Python dependency requirements.
+- watches any X account without needing a Twitter developer API key (uses public RSS feeds)
+- pulls the link out of the tweet text automatically
+- sends the order to JAP the second it detects a new post
+- remembers what it already ordered so it never double-buys
+- if one RSS mirror goes down it just switches to another one, no crashes
 
 ---
 
-## 🚀 Quick Setup Guide
+## files
 
-### 1. Install Dependencies
+- `main.py` — the main script, just run this
+- `x_tracker.py` — the part that watches the X account
+- `jap_client.py` — handles sending orders to JAP
+- `link_parser.py` — pulls the link out of the tweet
+- `state_manager.py` — tracks what's already been ordered
+- `test_jap.py` — use this to test your API key before running
+- `config.py` — loads your settings from the .env file
+- `.env.example` — copy this to .env and fill in your details
+
+---
+
+## setup
+
+**1. install the dependencies**
 
 ```bash
-cd c:\Users\salat\OneDrive\Desktop\python
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment (`.env`)
-
-Copy `.env.example` to `.env`:
+**2. create your .env file**
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your actual credentials:
+on Windows:
+```bash
+copy .env.example .env
+```
 
-```ini
-# JustAnotherPanel Credentials
-JAP_API_KEY=your_actual_jap_api_key_here
-JAP_API_URL=https://justanotherpanel.com/api/v2
+**3. open .env and fill in your stuff**
 
-# X Target Channel
-TARGET_X_USERNAME=target_username_here
-POLL_INTERVAL_SECONDS=3.0
-
-# Order Settings
-DEFAULT_SERVICE_ID=1234
+```
+JAP_API_KEY=your_key_from_justanotherpanel
+TARGET_X_USERNAME=the_username_you_want_to_track
+DEFAULT_SERVICE_ID=put_your_service_id_here
 DEFAULT_QUANTITY=1000
+POLL_INTERVAL_SECONDS=3
+```
 
-# Domain-to-Service Mapping (Optional)
-SERVICE_MAPPING_JSON={"instagram.com": 1234, "tiktok.com": 2345, "youtube.com": 3456, "x.com": 4567}
+to get your JAP API key: login → go to Account → API section → copy the key
+
+if you post to different platforms and want different service IDs per platform, add this too:
+
+```
+SERVICE_MAPPING_JSON={"instagram.com": 1111, "tiktok.com": 2222, "youtube.com": 3333}
 ```
 
 ---
 
-## 🧪 Testing your Setup
+## running it
 
-Test your JAP API Key and check account balance:
+test your API key first:
 
 ```bash
 python test_jap.py --balance
 ```
 
-Test placing a sample order:
-
-```bash
-python test_jap.py --order --service 1234 --link "https://instagram.com/p/sample" --quantity 100
-```
-
----
-
-## 🟢 Running the 24/7 Monitoring Daemon
-
-Start the main daemon:
+once that works, start the bot:
 
 ```bash
 python main.py
 ```
 
-### 24/7 Cloud Deployment (AWS / DigitalOcean / VPS)
+---
 
-To keep the script running 24/7 in the background on Linux servers:
+## running it 24/7 on a server
+
+if you're on a Linux VPS just do:
 
 ```bash
 nohup python3 main.py > bot.log 2>&1 &
 ```
 
-Or using `pm2`:
+or with pm2:
 
 ```bash
-pm2 start main.py --name "jap-x-bot" --interpreter python3
+pm2 start main.py --name jap-bot --interpreter python3
 ```
 
 ---
 
-## 🛡️ Fallback & Resilience Strategy
+## notes
 
-1. **Instance Auto-Rotation**: If a public Nitter mirror slows down or goes offline, `XTracker` automatically switches to the next configured mirror instance in real-time.
-2. **Duplicate Protection**: If the script restarts, `state_manager.py` checks SQLite memory to prevent duplicate orders for already processed posts.
+- the bot checks every 3 seconds by default, you can change that in .env
+- it uses 6 different Nitter mirrors and auto-switches if one goes down
+- processed tweet IDs are saved locally so even if you restart the bot it won't re-order old posts
