@@ -15,6 +15,9 @@ class Config:
     poll_interval: float = float(os.getenv("POLL_INTERVAL_SECONDS", "3.0"))
     default_service_id: str = str(os.getenv("DEFAULT_SERVICE_ID", "1234"))
     default_quantity: int = int(os.getenv("DEFAULT_QUANTITY", "1000"))
+    # Set USE_TWEET_URL=true when your service boosts tweet views/likes
+    # (the order link will be the tweet itself, not an external link inside it)
+    use_tweet_url: bool = os.getenv("USE_TWEET_URL", "false").lower() in ("true", "1", "yes")
     
     nitter_instances: List[str] = field(default_factory=lambda: [
         inst.strip() for inst in os.getenv(

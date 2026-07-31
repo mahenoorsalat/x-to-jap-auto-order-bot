@@ -3,11 +3,12 @@ import feedparser
 import httpx
 import logging
 import re
-from typing import List, Dict, Any
+import os
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("XTracker")
 
-# Extended list of known working Nitter public instances
+# Extended list of known Nitter public instances
 DEFAULT_NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.poast.org",
@@ -18,7 +19,9 @@ DEFAULT_NITTER_INSTANCES = [
     "https://nitter.unixfox.eu",
     "https://n.sneed.eu",
     "https://nitter.moomoo.me",
+    "https://nitter.cz",
 ]
+
 
 def _sanitize_url(url: str) -> str:
     """Auto-fix common URL typos like missing colon in https://"""
@@ -30,105 +33,191 @@ def _sanitize_url(url: str) -> str:
     return url.rstrip("/")
 
 
-class XTracker:
-    def __init__(self, username: str, nitter_instances: List[str]):
-        self.username = username.strip("@").strip()
-        # Sanitize all instance URLs to fix typos
-        sanitized = [_sanitize_url(inst) for inst in nitter_instances if inst.strip()]
-        # Merge with defaults so we always have fallbacks
-        seen = set()
-        merged = []
+class NitterEngine:
+    """Fetches X posts via public Nitter RSS mirrors."""
+
+    def __init__(self, username: str, instances: List[str]):
+        self.username = username
+        sanitized = [_sanitize_url(u) for u in instances if u.strip()]
+        seen, merged = set(), []
         for url in sanitized + DEFAULT_NITTER_INSTANCES:
             if url not in seen:
                 seen.add(url)
                 merged.append(url)
-        self.nitter_instances = merged
-        self.current_instance_idx = 0
-        self._account_not_found_count = 0
+        self.instances = merged
+        self.idx = 0
 
-    def _get_current_url(self) -> str:
-        base_url = self.nitter_instances[self.current_instance_idx]
-        return f"{base_url}/{self.username}/rss"
+    def _current_url(self) -> str:
+        return f"{self.instances[self.idx]}/{self.username}/rss"
 
-    def _rotate_instance(self):
-        old_inst = self.nitter_instances[self.current_instance_idx]
-        self.current_instance_idx = (self.current_instance_idx + 1) % len(self.nitter_instances)
-        new_inst = self.nitter_instances[self.current_instance_idx]
-        logger.warning(f"Switched Nitter instance from {old_inst} -> {new_inst}")
+    def _rotate(self):
+        old = self.instances[self.idx]
+        self.idx = (self.idx + 1) % len(self.instances)
+        logger.warning(f"Switched Nitter instance from {old} -> {self.instances[self.idx]}")
+
+    async def fetch(self, timeout: float = 5.0) -> Optional[List[Dict[str, Any]]]:
+        """
+        Returns list of posts, empty list on 404/private, or None if all rate-limited.
+        None means 'try another engine', [] means 'account not found/private'.
+        """
+        got_404 = 0
+        for _ in range(len(self.instances)):
+            url = self._current_url()
+            try:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                    resp = await client.get(url, headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    })
+
+                if resp.status_code == 200:
+                    feed = feedparser.parse(resp.text)
+                    if feed.get("bozo") and not feed.entries:
+                        logger.warning(f"Feed empty/invalid from {url}")
+                        self._rotate()
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    posts = []
+                    for entry in feed.entries:
+                        guid = getattr(entry, 'guid', None) or getattr(entry, 'link', None) or ''
+                        posts.append({
+                            'guid': str(guid),
+                            'title': getattr(entry, 'title', ''),
+                            'description': getattr(entry, 'description', '') or getattr(entry, 'summary', ''),
+                            'link': getattr(entry, 'link', ''),
+                            'pubDate': getattr(entry, 'published', '')
+                        })
+                    logger.debug(f"Nitter: {len(posts)} posts from {self.instances[self.idx]}")
+                    return posts
+
+                elif resp.status_code == 404:
+                    got_404 += 1
+                    logger.warning(f"[404] @{self.username} not found on {self.instances[self.idx]}")
+                    if got_404 >= 3:
+                        logger.error(
+                            f"\n{'='*60}\n"
+                            f"ACCOUNT NOT FOUND: @{self.username}\n"
+                            f"Reasons: wrong username, private account, or suspended.\n"
+                            f"Fix: Set TARGET_X_USERNAME to a PUBLIC X account in .env\n"
+                            f"{'='*60}"
+                        )
+                        return []
+                else:
+                    logger.warning(f"Nitter {url} returned HTTP {resp.status_code}")
+
+            except httpx.TimeoutException:
+                logger.debug(f"Timeout: {url}")
+            except Exception as e:
+                logger.debug(f"Error: {url}: {e}")
+
+            self._rotate()
+            await asyncio.sleep(0.5)
+
+        logger.warning("All Nitter mirrors rate-limited. Will retry next cycle.")
+        return None  # None = all rate-limited, not account error
+
+
+class TwikitEngine:
+    """
+    Fetches X posts via Twikit (X guest API / cookie-based).
+    Requires: pip install twikit
+    Optional: set X_USERNAME, X_EMAIL, X_PASSWORD in .env for authenticated access.
+    Falls back to guest token mode if no credentials provided.
+    """
+
+    def __init__(self, username: str):
+        self.username = username
+        self._client = None
+        self._available = False
+        try:
+            from twikit import Client  # noqa
+            self._available = True
+        except ImportError:
+            logger.debug("Twikit not installed — skipping Twikit engine")
+
+    async def _init_client(self):
+        if not self._available or self._client is not None:
+            return
+        try:
+            from twikit import Client
+            client = Client("en-US")
+            x_user = os.getenv("X_USERNAME", "")
+            x_email = os.getenv("X_EMAIL", "")
+            x_pass = os.getenv("X_PASSWORD", "")
+            cookies_file = "twikit_cookies.json"
+
+            if os.path.exists(cookies_file):
+                client.load_cookies(cookies_file)
+                logger.info("Twikit: loaded saved cookies")
+            elif x_user and x_email and x_pass:
+                await client.login(auth_info_1=x_email, auth_info_2=x_user, password=x_pass)
+                client.save_cookies(cookies_file)
+                logger.info("Twikit: logged in and saved cookies")
+            else:
+                logger.debug("Twikit: no X credentials in .env, skipping authenticated mode")
+                self._available = False
+                return
+
+            self._client = client
+        except Exception as e:
+            logger.warning(f"Twikit init failed: {e}")
+            self._available = False
+
+    async def fetch(self) -> Optional[List[Dict[str, Any]]]:
+        if not self._available:
+            return None
+        try:
+            await self._init_client()
+            if not self._client:
+                return None
+
+            user = await self._client.get_user_by_screen_name(self.username)
+            tweets = await user.get_tweets("Tweets", count=20)
+            posts = []
+            for t in tweets:
+                posts.append({
+                    'guid': str(t.id),
+                    'title': t.text[:100] if t.text else '',
+                    'description': t.text or '',
+                    'link': f"https://x.com/{self.username}/status/{t.id}",
+                    'pubDate': str(t.created_at) if hasattr(t, 'created_at') else ''
+                })
+            if posts:
+                logger.info(f"Twikit: {len(posts)} tweets fetched")
+            return posts
+        except Exception as e:
+            logger.warning(f"Twikit fetch error: {e}")
+            return None
+
+
+class XTracker:
+    """
+    Multi-engine X account tracker.
+    Engine 1: Nitter RSS mirrors (no auth, rotates automatically)
+    Engine 2: Twikit (X guest/cookie API — optional, more reliable)
+    """
+
+    def __init__(self, username: str, nitter_instances: List[str]):
+        self.username = username.strip("@").strip()
+        self._nitter = NitterEngine(self.username, nitter_instances)
+        self._twikit = TwikitEngine(self.username)
 
     async def fetch_latest_posts(self, timeout: float = 5.0) -> List[Dict[str, Any]]:
         """
-        Fetch RSS feed for target account from active Nitter instance.
-        - Rotates instance on 403/timeout/error
-        - Stops rotating on 404 (user not found / private) and warns clearly
-        Returns list of post dicts or empty list.
+        Try Nitter first. If all mirrors are rate-limited (returns None),
+        fall back to Twikit. Returns empty list if account not found/private.
         """
-        attempts = 0
-        max_attempts = len(self.nitter_instances)
-        got_404 = 0
+        # Try Nitter
+        result = await self._nitter.fetch(timeout=timeout)
 
-        while attempts < max_attempts:
-            target_rss_url = self._get_current_url()
-            try:
-                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                    resp = await client.get(
-                        target_rss_url,
-                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                    )
+        if result is None:
+            # All Nitter mirrors rate-limited — try Twikit fallback
+            logger.info("Nitter rate-limited, trying Twikit fallback...")
+            result = await self._twikit.fetch()
 
-                    if resp.status_code == 200:
-                        feed = feedparser.parse(resp.text)
-                        # feedparser may get a 200 but with an error inside
-                        if feed.get("bozo") and not feed.entries:
-                            logger.warning(f"Feed parsed but empty/invalid from {target_rss_url}")
-                            self._rotate_instance()
-                            attempts += 1
-                            await asyncio.sleep(0.5)
-                            continue
+        if result is None:
+            # Both engines failed — return empty, retry next cycle
+            logger.warning("Both Nitter and Twikit unavailable. Retrying next poll cycle.")
+            return []
 
-                        posts = []
-                        for entry in feed.entries:
-                            guid = getattr(entry, 'guid', None) or getattr(entry, 'link', None) or entry.get('title', '')
-                            posts.append({
-                                'guid': str(guid),
-                                'title': getattr(entry, 'title', ''),
-                                'description': getattr(entry, 'description', '') or getattr(entry, 'summary', ''),
-                                'link': getattr(entry, 'link', ''),
-                                'pubDate': getattr(entry, 'published', '')
-                            })
-                        self._account_not_found_count = 0  # reset on success
-                        return posts
-
-                    elif resp.status_code == 404:
-                        got_404 += 1
-                        logger.warning(f"[404] User '@{self.username}' not found on {self.nitter_instances[self.current_instance_idx]}")
-                        # If we get 404 from 3+ instances, the account is likely private or doesn't exist
-                        if got_404 >= 3:
-                            logger.error(
-                                f"\n{'='*60}\n"
-                                f"ACCOUNT NOT FOUND: @{self.username}\n"
-                                f"Possible reasons:\n"
-                                f"  1. The X username is wrong - double check spelling\n"
-                                f"  2. The account is PRIVATE - Nitter cannot read private accounts\n"
-                                f"  3. The account was suspended or deleted\n"
-                                f"Fix: Set TARGET_X_USERNAME to a PUBLIC X account username in .env\n"
-                                f"{'='*60}"
-                            )
-                            return []
-
-                    elif resp.status_code in (403, 429):
-                        logger.warning(f"Nitter instance {target_rss_url} returned HTTP {resp.status_code} (rate limited/blocked)")
-                    else:
-                        logger.warning(f"Nitter instance {target_rss_url} returned HTTP {resp.status_code}")
-
-            except httpx.TimeoutException:
-                logger.debug(f"Timeout on {target_rss_url}")
-            except Exception as e:
-                logger.debug(f"Error requesting {target_rss_url}: {e}")
-
-            self._rotate_instance()
-            attempts += 1
-            await asyncio.sleep(0.5)
-
-        logger.error("All Nitter instances failed to respond. Will retry next poll cycle.")
-        return []
+        return result

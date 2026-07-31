@@ -85,13 +85,36 @@ async def main():
                 if not state_mgr.is_processed(guid):
                     logger.info(f"{Fore.YELLOW}>>> NEW POST DETECTED! GUID: {guid}{Style.RESET_ALL}")
                     post_text = newest['description'] or newest['title']
-                    
-                    # Extract target URL
-                    target_url = await LinkParser.get_first_target_url(post_text)
-                    
+                    tweet_own_url = newest.get('link', '')
+                    # Convert nitter link to x.com link
+                    if tweet_own_url and 'nitter' in tweet_own_url:
+                        tweet_own_url = tweet_own_url.replace('nitter.net', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.poast.org', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('privacydev.net', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.privacydev.net', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.hu', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.cz', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.1d4.us', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.kavin.rocks', 'x.com')
+                        tweet_own_url = tweet_own_url.replace('nitter.unixfox.eu', 'x.com')
+                        # Remove #m anchor if present
+                        tweet_own_url = tweet_own_url.split('#')[0]
+
+                    if config.use_tweet_url:
+                        # USE_TWEET_URL=true mode: order views/likes on the tweet itself
+                        target_url = tweet_own_url
+                        logger.info(f"Tweet URL mode: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+                    else:
+                        # Default mode: extract external link from tweet body
+                        target_url = await LinkParser.get_first_target_url(post_text)
+                        if target_url:
+                            logger.info(f"External link extracted: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+                        else:
+                            # Fallback to tweet URL if no external link found
+                            target_url = tweet_own_url
+                            logger.info(f"No external link in post, using tweet URL: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+
                     if target_url:
-                        logger.info(f"Target Link Extracted: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
-                        
                         # Determine Service ID (dynamic domain routing or default)
                         service_id = config.get_service_id_for_url(target_url)
                         logger.info(f"Routing to JAP Service ID: {Fore.CYAN}{service_id}{Style.RESET_ALL}")
@@ -104,7 +127,7 @@ async def main():
                                 quantity=config.default_quantity
                             )
                             order_id = str(res.get("order", ""))
-                            logger.info(f"{Fore.GREEN}SUCCESS! JAP Order Placed -> Response: {res}{Style.RESET_ALL}")
+                            logger.info(f"{Fore.GREEN}SUCCESS! JAP Order Placed -> Order ID: {order_id} | Link: {target_url}{Style.RESET_ALL}")
                             state_mgr.mark_processed(guid, target_url, order_id, service_id)
                         else:
                             logger.warning(f"{Fore.YELLOW}[DEMO MODE] Would place order for {target_url} with service {service_id}{Style.RESET_ALL}")
