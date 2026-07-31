@@ -19,10 +19,16 @@ class Config:
     # (the order link will be the tweet itself, not an external link inside it)
     use_tweet_url: bool = os.getenv("USE_TWEET_URL", "false").lower() in ("true", "1", "yes")
     
+    # Optional X credentials for 100% reliable 0-delay Twikit GraphQL mode
+    x_username: str = os.getenv("X_USERNAME", "").strip()
+    x_email: str = os.getenv("X_EMAIL", "").strip()
+    x_password: str = os.getenv("X_PASSWORD", "").strip()
+    x_auth_token: str = os.getenv("X_AUTH_TOKEN", "").strip()
+
     nitter_instances: List[str] = field(default_factory=lambda: [
         inst.strip() for inst in os.getenv(
             "NITTER_INSTANCES", 
-            "https://nitter.net,https://nitter.poast.org,https://privacydev.net,https://nitter.privacydev.net,https://nitter.hu,https://nitter.cz"
+            "https://nitter.net,https://nitter.poast.org,https://privacydev.net,https://nitter.privacydev.net,https://nitter.hu,https://nitter.cz,https://nitter.1d4.us,https://nitter.kavin.rocks,https://nitter.unixfox.eu,https://n.sneed.eu,https://nitter.moomoo.me"
         ).split(",") if inst.strip()
     ])
     
@@ -47,3 +53,4 @@ class Config:
 
 # Singleton config instance
 config = Config()
+

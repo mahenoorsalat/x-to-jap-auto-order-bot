@@ -29,7 +29,7 @@ except Exception as e:
     check("config.py loads", False, str(e))
 
 try:
-    from x_tracker import XTracker, _sanitize_url
+    from x_tracker import XTracker, _sanitize_url, clean_tweet_url
     check("x_tracker.py imports", True)
 except Exception as e:
     check("x_tracker.py imports", False, str(e))
@@ -52,8 +52,8 @@ try:
 except Exception as e:
     check("jap_client.py imports", False, str(e))
 
-# ─── 2. URL SANITIZER ────────────────────────────────────────────────────────
-print("\n[2/7] Testing URL sanitizer (fixes https// typos)...")
+# ─── 2. URL SANITIZER & TWEET URL CLEANER ─────────────────────────────────────
+print("\n[2/7] Testing URL sanitizer & clean_tweet_url...")
 tests = [
     ("https//nitter.poast.org", "https://nitter.poast.org"),
     ("http//nitter.hu",         "http://nitter.hu"),
@@ -63,6 +63,16 @@ tests = [
 for raw, expected in tests:
     result = _sanitize_url(raw)
     check(f"sanitize '{raw}'", result == expected, f"got '{result}'")
+
+clean_tests = [
+    ("https://nitter.tiekoetter.com/LogicMadeup/status/2083160424678297702#m", "LogicMadeup", "https://x.com/LogicMadeup/status/2083160424678297702"),
+    ("https://nitter.cz/LogicMadeup/status/2083160424678297702", "LogicMadeup", "https://x.com/LogicMadeup/status/2083160424678297702"),
+    ("https://vxtwitter.com/Tesla/status/1234567890", "Tesla", "https://x.com/Tesla/status/1234567890"),
+]
+for raw, user, expected in clean_tests:
+    res = clean_tweet_url(raw, user)
+    check(f"clean_tweet_url '{raw}'", res == expected, f"got '{res}'")
+
 
 # ─── 3. NITTER LIVE RSS FETCH ─────────────────────────────────────────────────
 print("\n[3/7] Testing Nitter live RSS fetch (using @elonmusk - public account)...")

@@ -6,7 +6,7 @@ from colorama import Fore, Style, init
 
 from config import config
 from state_manager import StateManager
-from x_tracker import XTracker
+from x_tracker import XTracker, clean_tweet_url
 from link_parser import LinkParser
 from jap_client import JAPClient
 
@@ -40,7 +40,7 @@ async def main():
  Default Service  : {Fore.CYAN}ID {config.default_service_id}{Style.RESET_ALL}
  Default Quantity : {Fore.CYAN}{config.default_quantity}{Style.RESET_ALL}
  Nitter Instances : {Fore.CYAN}{len(config.nitter_instances)} mirrors configured{Style.RESET_ALL}
-{Fore.GREEN}================================================================={Style.RESET_ALL}
+=================================================================
 """)
 
     # Initialize components
@@ -85,20 +85,7 @@ async def main():
                 if not state_mgr.is_processed(guid):
                     logger.info(f"{Fore.YELLOW}>>> NEW POST DETECTED! GUID: {guid}{Style.RESET_ALL}")
                     post_text = newest['description'] or newest['title']
-                    tweet_own_url = newest.get('link', '')
-                    # Convert nitter link to x.com link
-                    if tweet_own_url and 'nitter' in tweet_own_url:
-                        tweet_own_url = tweet_own_url.replace('nitter.net', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.poast.org', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('privacydev.net', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.privacydev.net', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.hu', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.cz', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.1d4.us', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.kavin.rocks', 'x.com')
-                        tweet_own_url = tweet_own_url.replace('nitter.unixfox.eu', 'x.com')
-                        # Remove #m anchor if present
-                        tweet_own_url = tweet_own_url.split('#')[0]
+                    tweet_own_url = clean_tweet_url(newest.get('link', ''), config.target_x_username)
 
                     if config.use_tweet_url:
                         # USE_TWEET_URL=true mode: order views/likes on the tweet itself
