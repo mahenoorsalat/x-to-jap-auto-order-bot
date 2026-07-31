@@ -8,10 +8,11 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("XTracker")
 
-# Extended list of known Nitter public instances
+# Extended list of known working Nitter public instances
 DEFAULT_NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.poast.org",
+    "https://privacydev.net",
     "https://nitter.privacydev.net",
     "https://nitter.hu",
     "https://nitter.1d4.us",
@@ -71,8 +72,8 @@ class NitterEngine:
 
                 if resp.status_code == 200:
                     feed = feedparser.parse(resp.text)
-                    if feed.get("bozo") and not feed.entries:
-                        logger.warning(f"Feed empty/invalid from {url}")
+                    if not feed.entries:
+                        logger.warning(f"Feed returned 0 entries from {url}, rotating...")
                         self._rotate()
                         await asyncio.sleep(0.5)
                         continue
