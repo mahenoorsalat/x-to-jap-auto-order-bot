@@ -68,11 +68,12 @@ async def main():
     # If starting fresh, mark existing posts as seen so we don't trigger back-orders on startup
     db_guids = state_mgr.get_all_processed_guids()
     if not db_guids and initial_posts:
-        logger.info(f"First-time startup detected. Seeding {len(initial_posts)} existing posts to state DB...")
+        logger.info(f"First-time startup detected. Seeding {len(initial_posts)} existing posts into processed_posts.db state DB...")
         for p in initial_posts:
             state_mgr.mark_processed(p['guid'])
+        logger.info(f"{Fore.CYAN}[TIP] To manually force an order for the latest tweet right now, run: python trigger_latest.py{Style.RESET_ALL}")
 
-    logger.info(f"{Fore.GREEN}Active monitoring started! Press Ctrl+C to stop.{Style.RESET_ALL}")
+    logger.info(f"{Fore.GREEN}Active monitoring started! Listening for NEW tweets from @{config.target_x_username}... (Press Ctrl+C to stop){Style.RESET_ALL}")
 
     while running:
         try:

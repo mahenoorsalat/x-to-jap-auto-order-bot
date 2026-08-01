@@ -56,6 +56,11 @@ python run_tests.py
 python test_jap.py --balance
 ```
 
+**Instant Order Trigger (Test on Latest Tweet):**
+```bash
+python trigger_latest.py
+```
+
 **Start 24/7 Live Daemon:**
 ```bash
 python main.py
