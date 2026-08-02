@@ -48,6 +48,11 @@ async def main():
     tracker = XTracker(config.target_x_username, config.nitter_instances)
     jap_client = JAPClient(config.jap_api_key, config.jap_api_url)
 
+    if tracker._twikit.is_authenticated():
+        logger.info(f"{Fore.GREEN}[TRACKER ENGINE] Direct X GraphQL (Twikit) Active — INSTANT 0-delay post detection enabled.{Style.RESET_ALL}")
+    else:
+        logger.info(f"{Fore.YELLOW}[TRACKER ENGINE] Public Nitter RSS Mirrors Active. Note: Public mirrors cache feeds for 5-15 mins. For instant 0-second detection, set X_AUTH_TOKEN or X_USERNAME/X_PASSWORD in .env.{Style.RESET_ALL}")
+
     # Validate JAP connection/balance at startup if API key is provided
     if config.jap_api_key != "YOUR_JAP_API_KEY_HERE":
         try:
