@@ -74,8 +74,34 @@ for raw, user, expected in clean_tests:
     check(f"clean_tweet_url '{raw}'", res == expected, f"got '{res}'")
 
 
-# ─── 3. NITTER LIVE RSS FETCH ─────────────────────────────────────────────────
-print("\n[3/7] Testing Nitter live RSS fetch (using @elonmusk - public account)...")
+# ─── 3. AUTH OPT-IN GUARD ───────────────────────────────────────────────────
+print("\n[3/7] Testing auth opt-in guard...")
+original_auth = os.environ.get("ALLOW_AUTHENTICATED_X_ACCESS")
+original_user = os.environ.get("X_USERNAME")
+original_pass = os.environ.get("X_PASSWORD")
+try:
+    os.environ["ALLOW_AUTHENTICATED_X_ACCESS"] = "false"
+    os.environ["X_USERNAME"] = "dummy_user"
+    os.environ["X_PASSWORD"] = "dummy_pass"
+    from x_tracker import TwikitEngine
+    eng = TwikitEngine("elonmusk")
+    check("Twikit auth stays disabled without opt-in", not eng.is_authenticated(), "public-feed-only mode")
+finally:
+    if original_auth is None:
+        os.environ.pop("ALLOW_AUTHENTICATED_X_ACCESS", None)
+    else:
+        os.environ["ALLOW_AUTHENTICATED_X_ACCESS"] = original_auth
+    if original_user is None:
+        os.environ.pop("X_USERNAME", None)
+    else:
+        os.environ["X_USERNAME"] = original_user
+    if original_pass is None:
+        os.environ.pop("X_PASSWORD", None)
+    else:
+        os.environ["X_PASSWORD"] = original_pass
+
+# ─── 4. NITTER LIVE RSS FETCH ─────────────────────────────────────────────────
+print("\n[4/7] Testing Nitter live RSS fetch (using @elonmusk - public account)...")
 async def test_nitter():
     tracker = XTracker("elonmusk", config.nitter_instances)
     posts = await tracker.fetch_latest_posts(timeout=6.0)
@@ -94,8 +120,8 @@ async def test_nitter():
 
 asyncio.run(test_nitter())
 
-# ─── 4. 404 DETECTION (private/wrong username) ───────────────────────────────
-print("\n[4/7] Testing 404 handling (fake/private username)...")
+# ─── 5. 404 DETECTION (private/wrong username) ───────────────────────────────
+print("\n[5/7] Testing 404 handling (fake/private username)...")
 async def test_404():
     tracker = XTracker("this_user_definitely_does_not_exist_xyz123abc", config.nitter_instances)
     posts = await tracker.fetch_latest_posts(timeout=5.0)
@@ -104,8 +130,8 @@ async def test_404():
 
 asyncio.run(test_404())
 
-# ─── 5. LINK PARSER ──────────────────────────────────────────────────────────
-print("\n[5/7] Testing link parser...")
+# ─── 6. LINK PARSER ──────────────────────────────────────────────────────────
+print("\n[6/7] Testing link parser...")
 async def test_parser():
     html_samples = [
         ('<p>Check this out: <a href="https://instagram.com/p/ABC123">here</a></p>', "instagram.com"),
@@ -123,8 +149,8 @@ async def test_parser():
 
 asyncio.run(test_parser())
 
-# ─── 6. STATE MANAGER ────────────────────────────────────────────────────────
-print("\n[6/7] Testing state manager (deduplication)...")
+# ─── 7. STATE MANAGER ────────────────────────────────────────────────────────
+print("\n[7/7] Testing state manager (deduplication)...")
 import tempfile, os
 tmp_db = os.path.join(tempfile.gettempdir(), "test_state.db")
 sm = StateManager(db_path=tmp_db)
@@ -139,8 +165,49 @@ try:
 except:
     pass
 
-# ─── 7. JAP API CONNECTION ───────────────────────────────────────────────────
-print("\n[7/7] Testing JAP API connection...")
+# ─── 8. NEW-POST DETECTION LOGIC ───────────────────────────────────────────
+print("\n[8/7] Testing new-post detection logic...")
+async def test_detection_logic():
+    from main import process_new_posts
+
+    class FakeStateManager:
+        def __init__(self):
+            self.processed = {"old_post"}
+        def is_processed(self, guid):
+            return guid in self.processed
+        def mark_processed(self, guid, target_url=None, order_id=None, service_id=None):
+            self.processed.add(guid)
+
+    class FakeJAPClient:
+        def __init__(self):
+            self.orders = []
+        async def add_order(self, **kwargs):
+            self.orders.append(kwargs)
+            return {"order": "777"}
+
+    class DummyConfig:
+        target_x_username = "LogicMadeup"
+        use_tweet_url = False
+        default_service_id = 2098
+        default_quantity = 200
+        jap_api_key = "DUMMY_KEY"
+        def get_service_id_for_url(self, url):
+            return self.default_service_id
+
+    sm = FakeStateManager()
+    jap = FakeJAPClient()
+    posts = [
+        {"guid": "old_post", "description": "already seen", "title": "", "link": "https://x.com/LogicMadeup/status/111"},
+        {"guid": "new_post", "description": "fresh tweet", "title": "", "link": "https://x.com/LogicMadeup/status/222"},
+    ]
+
+    processed = await process_new_posts(posts, sm, DummyConfig(), jap)
+    check("process_new_posts detects later posts in the list", processed == ["new_post"] and sm.is_processed("new_post") and len(jap.orders) == 1, f"processed={processed}, orders={len(jap.orders)}")
+
+asyncio.run(test_detection_logic())
+
+# ─── 9. JAP API CONNECTION ───────────────────────────────────────────────────
+print("\n[9/9] Testing JAP API connection...")
 async def test_jap():
     from config import config
     if config.jap_api_key == "YOUR_JAP_API_KEY_HERE":

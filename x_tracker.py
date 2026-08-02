@@ -238,9 +238,14 @@ class TwikitEngine:
             logger.debug("Twikit package not installed — skipping Twikit engine")
 
     def is_authenticated(self) -> bool:
-        """Check if X credentials or cookie files are present."""
+        """Check whether authenticated X access is explicitly allowed and available."""
         if not self._available:
             return False
+
+        auth_allowed = os.getenv("ALLOW_AUTHENTICATED_X_ACCESS", "false").strip().lower() in ("1", "true", "yes", "on")
+        if not auth_allowed:
+            return False
+
         has_auth_token = bool(os.getenv("X_AUTH_TOKEN", "").strip())
         has_creds = bool(os.getenv("X_USERNAME", "").strip() and os.getenv("X_PASSWORD", "").strip())
         has_cookies = os.path.exists("twikit_cookies.json")

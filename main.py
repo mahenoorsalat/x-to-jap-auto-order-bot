@@ -23,10 +23,60 @@ logger = logging.getLogger("MainDaemon")
 
 running = True
 
+
 def handle_exit(sig, frame):
     global running
     print(f"\n{Fore.YELLOW}[!] Shutdown requested. Stopping daemon gracefully...{Style.RESET_ALL}")
     running = False
+
+
+async def process_new_posts(posts, state_mgr, config, jap_client):
+    """Process each unprocessed post in the current feed and return a list of handled GUIDs."""
+    handled_guids = []
+    for post in posts or []:
+        guid = post.get('guid') or post.get('link') or ''
+        if not guid or state_mgr.is_processed(guid):
+            continue
+
+        logger.info(f"{Fore.YELLOW}>>> NEW POST DETECTED! GUID: {guid}{Style.RESET_ALL}")
+        post_text = post.get('description') or post.get('title') or ''
+        tweet_own_url = clean_tweet_url(post.get('link', ''), config.target_x_username)
+
+        if config.use_tweet_url:
+            target_url = tweet_own_url
+            logger.info(f"Tweet URL mode: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+        else:
+            target_url = await LinkParser.get_first_target_url(post_text)
+            if target_url:
+                logger.info(f"External link extracted: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+            else:
+                target_url = tweet_own_url
+                logger.info(f"No external link in post, using tweet URL: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
+
+        if target_url:
+            service_id = config.get_service_id_for_url(target_url)
+            logger.info(f"Routing to JAP Service ID: {Fore.CYAN}{service_id}{Style.RESET_ALL}")
+
+            if config.jap_api_key != "YOUR_JAP_API_KEY_HERE":
+                res = await jap_client.add_order(
+                    service_id=service_id,
+                    link=target_url,
+                    quantity=config.default_quantity
+                )
+                order_id = str(res.get("order", ""))
+                logger.info(f"{Fore.GREEN}SUCCESS! JAP Order Placed -> Order ID: {order_id} | Link: {target_url}{Style.RESET_ALL}")
+                state_mgr.mark_processed(guid, target_url, order_id, service_id)
+            else:
+                logger.warning(f"{Fore.YELLOW}[DEMO MODE] Would place order for {target_url} with service {service_id}{Style.RESET_ALL}")
+                state_mgr.mark_processed(guid, target_url, "DEMO_ORDER", service_id)
+        else:
+            logger.info("No actionable URL found in post body. Marking as processed.")
+            state_mgr.mark_processed(guid)
+
+        handled_guids.append(guid)
+
+    return handled_guids
+
 
 async def main():
     global running
@@ -66,16 +116,14 @@ async def main():
     else:
         logger.warning(f"{Fore.RED}JAP_API_KEY is unset (.env). Set your actual JAP API Key before running production orders!{Style.RESET_ALL}")
 
-    # Initial warm-up poll to seed existing posts into memory if DB is empty
+    # Initial warm-up poll to establish a baseline without treating all existing posts as processed.
     logger.info(f"Performing initial scan for @{config.target_x_username}...")
     initial_posts = await tracker.fetch_latest_posts()
-    
-    # If starting fresh, mark existing posts as seen so we don't trigger back-orders on startup
+    initial_known_guids = {p.get('guid') for p in initial_posts if p.get('guid')}
+
     db_guids = state_mgr.get_all_processed_guids()
     if not db_guids and initial_posts:
-        logger.info(f"First-time startup detected. Seeding {len(initial_posts)} existing posts into processed_posts.db state DB...")
-        for p in initial_posts:
-            state_mgr.mark_processed(p['guid'])
+        logger.info("Initial baseline captured; new posts appearing after startup will be detected normally.")
         logger.info(f"{Fore.CYAN}[TIP] To manually force an order for the latest tweet right now, run: python trigger_latest.py{Style.RESET_ALL}")
 
     logger.info(f"{Fore.GREEN}Active monitoring started! Listening for NEW tweets from @{config.target_x_username}... (Press Ctrl+C to stop){Style.RESET_ALL}")
@@ -84,50 +132,9 @@ async def main():
         try:
             posts = await tracker.fetch_latest_posts()
             if posts:
-                # Top post is the newest
-                newest = posts[0]
-                guid = newest['guid']
-
-                if not state_mgr.is_processed(guid):
-                    logger.info(f"{Fore.YELLOW}>>> NEW POST DETECTED! GUID: {guid}{Style.RESET_ALL}")
-                    post_text = newest['description'] or newest['title']
-                    tweet_own_url = clean_tweet_url(newest.get('link', ''), config.target_x_username)
-
-                    if config.use_tweet_url:
-                        # USE_TWEET_URL=true mode: order views/likes on the tweet itself
-                        target_url = tweet_own_url
-                        logger.info(f"Tweet URL mode: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
-                    else:
-                        # Default mode: extract external link from tweet body
-                        target_url = await LinkParser.get_first_target_url(post_text)
-                        if target_url:
-                            logger.info(f"External link extracted: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
-                        else:
-                            # Fallback to tweet URL if no external link found
-                            target_url = tweet_own_url
-                            logger.info(f"No external link in post, using tweet URL: {Fore.CYAN}{target_url}{Style.RESET_ALL}")
-
-                    if target_url:
-                        # Determine Service ID (dynamic domain routing or default)
-                        service_id = config.get_service_id_for_url(target_url)
-                        logger.info(f"Routing to JAP Service ID: {Fore.CYAN}{service_id}{Style.RESET_ALL}")
-
-                        # Trigger order on JustAnotherPanel
-                        if config.jap_api_key != "YOUR_JAP_API_KEY_HERE":
-                            res = await jap_client.add_order(
-                                service_id=service_id,
-                                link=target_url,
-                                quantity=config.default_quantity
-                            )
-                            order_id = str(res.get("order", ""))
-                            logger.info(f"{Fore.GREEN}SUCCESS! JAP Order Placed -> Order ID: {order_id} | Link: {target_url}{Style.RESET_ALL}")
-                            state_mgr.mark_processed(guid, target_url, order_id, service_id)
-                        else:
-                            logger.warning(f"{Fore.YELLOW}[DEMO MODE] Would place order for {target_url} with service {service_id}{Style.RESET_ALL}")
-                            state_mgr.mark_processed(guid, target_url, "DEMO_ORDER", service_id)
-                    else:
-                        logger.info("No actionable URL found in post body. Marking as processed.")
-                        state_mgr.mark_processed(guid)
+                fresh_posts = [p for p in posts if p.get('guid') not in initial_known_guids]
+                if fresh_posts:
+                    await process_new_posts(fresh_posts, state_mgr, config, jap_client)
 
         except Exception as e:
             logger.error(f"Unexpected error in main loop: {e}")
