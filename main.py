@@ -122,6 +122,8 @@ async def main():
     initial_known_guids = {p.get('guid') for p in initial_posts if p.get('guid')}
 
     db_guids = state_mgr.get_all_processed_guids()
+    known_guids = set(db_guids) | initial_known_guids
+
     if not db_guids and initial_posts:
         logger.info("Initial baseline captured; new posts appearing after startup will be detected normally.")
         logger.info(f"{Fore.CYAN}[TIP] To manually force an order for the latest tweet right now, run: python trigger_latest.py{Style.RESET_ALL}")
@@ -132,9 +134,20 @@ async def main():
         try:
             posts = await tracker.fetch_latest_posts()
             if posts:
-                fresh_posts = [p for p in posts if p.get('guid') not in initial_known_guids]
+                fresh_posts = []
+                for post in posts:
+                    guid = post.get('guid')
+                    if not guid:
+                        continue
+                    if guid in known_guids or state_mgr.is_processed(guid):
+                        continue
+                    fresh_posts.append(post)
+
                 if fresh_posts:
                     await process_new_posts(fresh_posts, state_mgr, config, jap_client)
+
+                # Keep the seen GUID set updated so later polls only look for truly newer posts.
+                known_guids.update({p.get('guid') for p in posts if p.get('guid')})
 
         except Exception as e:
             logger.error(f"Unexpected error in main loop: {e}")
